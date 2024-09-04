@@ -1,0 +1,107 @@
+// #################################### AOI ####################################
+
+var aotea = ee.FeatureCollection('projects/aotealandslides/assets/aotea');
+
+Map.addLayer (aotea, {color: 'red'}, 'aotea');
+
+Map.centerObject(aotea, 11);
+
+// #################################### MASKING ####################################
+
+// ------------------------- cloudmasking Sentinel 2 -------------------------
+
+function mask1clouds(image) {
+  var qa = image.select('QA60');
+// Bits 10 and 11 are clouds and cirrus, respectively
+  var cloudBitMask = 1 << 10;
+  var cirrusBitMask = 1 << 11;
+// Both flags should be set to zero, indicating clear conditions
+  var mask1 = qa.bitwiseAnd(cloudBitMask).eq(0)
+              .and(qa.bitwiseAnd(cirrusBitMask).eq(0));
+  return image.updateMask(mask1).divide(10000);
+}
+
+//----------------------- advanced cloudmasking Sentinel 2 ----------------------
+
+// Two lists that map from a common name to the sensor-specific bands. 
+var S2_BANDS = ['B2', 'B3', 'B4', 'B8', 'B11', 'B12']; 
+var STD_NAMES = ['blue', 'green', 'red', 'nir', 'swir1', 'swir2'];
+
+//Function that rescales (between 1 and 0) for cloud score (A helper to apply an expression and linearly rescale the output))
+function rescale(imag, exp, thresholds) { 
+  return imag.expression(exp, {
+      'blue': imag.select('B2'), // Remnaming the bands to add together easier
+      'green': imag.select('B3'),
+      'red': imag.select('B4'),
+      'nir': imag.select('B8'),
+      'swir1': imag.select('B11'),
+      'swir2': imag.select('B12')
+    })
+    .subtract(thresholds[0])
+    .divide(thresholds[1] - thresholds[0]);
+}
+
+
+// Function to compute a cloud score.
+// This expects the input image to have the common band names: ["red", "blue", etc]. 
+function calcCloudScore(img) { 
+  var score = ee.Image(1.0); 
+  // Clouds are reasonably bright in the blue band. 
+  score = score.min(rescale(img, 'blue', [0.1, 0.3])); 
+  // Clouds are reasonably bright in all visible bands. 
+  score = score.min(rescale(img, 'red + green + blue', [0.2, 0.8])); 
+  // Clouds are reasonably bright in all infrared bands. 
+  score = score.min(rescale(img, 'nir + swir1 + swir1', [0.3, 0.8])); 
+  return score;
+}
+
+// Define the cloud masking function
+function mask2clouds(img1) {
+  var cloudScore = calcCloudScore(img1);
+  var mask = cloudScore.lte(0.2);  // Threshold to mask pixels with a cloud score greater than 0.2
+  return img1.updateMask(mask);  // Apply the mask
+}
+
+
+// #################################### IMAGE COLLECTION & COMPOSTING ####################################
+
+// ------------------------- SENTINEL 2 -------------------------
+
+// Filtering to only include Aotea for certain dates with certain amount of cloud coverage
+var year = 2018;
+var filteredS2 = ee.ImageCollection('COPERNICUS/S2_SR_HARMONIZED')
+                .filterDate(year + '-11-01', year + '-12-31')
+                .filterBounds(aotea)
+                .filterMetadata('CLOUDY_PIXEL_PERCENTAGE', 'less_than', 50);
+                
+
+// Apply function to each image in the collection.
+var mask1 = filteredS2.map(mask1clouds);
+var mask2 = mask1.map(mask2clouds);
+var mask3 = filteredS2.map(mask2clouds);
+var compositeS2 = mask1.median().clip(aotea);
+var composite2S2 = mask2.median().clip(aotea);
+var composite3S2 = mask3.median().clip(aotea);
+// #################################### VISUALIZATIONS ####################################
+
+// ------------------------- Sentinel 2 visualization -------------------------
+
+var S2_vis = {
+  min: 0.0,
+  max: 0.3,
+  bands: ['B4', 'B3', 'B2']
+}
+var S2_cloud = {
+  min: 0.0,
+  max: 1,
+  palette: ['blue', 'white']
+}
+
+// Add the composite to the map
+Map.addLayer(compositeS2, S2_vis, 'Mask 1 on S2_' + year);
+Map.addLayer(composite2S2, S2_vis, 'Mask 1 AND 2 on S2_' + year);
+Map.addLayer(composite3S2, S2_vis, 'Mask 2 on S2_' + year);
+// Troubleshooting
+var sampleImage = mask1.first(); // Take one image from the collection for inspection
+var sampleScore = calcCloudScore(sampleImage.select(S2_BANDS).clip(aotea));
+Map.addLayer(sampleScore, S2_cloud, 'Sample Cloud Score');

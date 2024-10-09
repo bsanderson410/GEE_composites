@@ -1,0 +1,256 @@
+// #################################### AOI ####################################
+
+var aotea = ee.FeatureCollection('projects/aotealandslides/assets/aotea');
+
+Map.addLayer (aotea, {color: 'red'}, 'aotea');
+
+Map.centerObject(aotea, 11);
+
+//##################################### Processing #################################
+
+function processImage1(img) {
+    // var img = ee.Image(imageList.get(index));
+    // var date = ee.Date(img.get('system:time_start')).format('YYYY-MM-dd').getInfo();
+    // print(date);
+    var mask1 = mask1clouds(img.clip(aotea));
+    // Map.addLayer(mask1, S2_vis, 'Masked Image on ' + date);
+    // var cloudScore1 = calcCloudScore(img.clip(aotea));
+    // Map.addLayer(cloudScore1, S2_cloud, 'Image from ' + date + ' Cloud Score');
+    var cloudScorePostMask = mask3clouds(mask1, calcCloudScore2(mask1))
+    // Map.addLayer(cloudScorePostMask, S2_vis, '2nd Mask on ' + date + ' from Cloud Score')
+    return cloudScorePostMask;
+}
+
+// #################################### MASKING ####################################
+
+// ------------------------- cloudmasking Sentinel 2 -------------------------
+
+function mask1clouds(image) {
+  var qa = image.select('QA60');
+// Bits 10 and 11 are clouds and cirrus, respectively
+  var cloudBitMask = 1 << 10;
+  var cirrusBitMask = 1 << 11;
+// Both flags should be set to zero, indicating clear conditions
+  var mask1 = qa.bitwiseAnd(cloudBitMask).eq(0)
+              .and(qa.bitwiseAnd(cirrusBitMask).eq(0));
+  return image.updateMask(mask1).divide(10000);
+}
+
+//----------------------- advanced cloudmasking Sentinel 2 ----------------------
+
+// Two lists that map from a common name to the sensor-specific bands. 
+var S2_BANDS = ['B2', 'B3', 'B4', 'B8', 'B11', 'B12']; 
+var STD_NAMES = ['blue', 'green', 'red', 'nir', 'swir1', 'swir2'];
+
+//Function that rescales (between 1 and 0) for cloud score (A helper to apply an expression and linearly rescale the output))
+function rescale2(imag, exp, thresholds) { 
+  return imag.expression(exp, {
+      'blue': imag.select('B2'), // Remnaming the bands to add together easier
+      'green': imag.select('B3'),
+      'red': imag.select('B4'),
+      'nir': imag.select('B8'),
+      'swir1': imag.select('B11'),
+      'swir2': imag.select('B12')
+    })
+    .subtract(thresholds[0])
+    .divide(thresholds[1] - thresholds[0]);
+}
+
+
+// Function to compute a cloud score (rename occurs via rescale function)
+function calcCloudScore2(img) { 
+  var score = ee.Image(1.0); 
+  // Clouds are reasonably bright in the blue band. 
+  score = score.min(rescale2(img, 'blue', [0.05, 0.3])); 
+  // Clouds are reasonably bright in all visible bands. 
+  score = score.min(rescale2(img, 'red + green + blue', [0.1, 0.8])); 
+  // Clouds are reasonably bright in all infrared bands. 
+  score = score.min(rescale2(img, 'nir + swir1 + swir1', [0.15, 0.8])); 
+  return score;
+}
+
+// Define the cloud masking function
+function mask2clouds(img1, score1) {
+  var mask2 = score1.lte(0.2);  // Threshold to mask pixels with a cloud score greater than 0.2
+  return img1.updateMask(mask2);  // Apply the mask
+}
+
+// Define the cloud masking function WITH buffer
+function mask3clouds(img1, score1) {
+  // Create a cloud mask where cloud score is greater than 0.2
+  var cloudMask = score1.gt(0.1);
+  // Use fastDistanceTransform() to compute distance from clouds in meters
+  var distanceFromClouds = cloudMask.fastDistanceTransform(30);  // 30 meters distance, adjust as needed
+  // Create a buffer mask where distance is less than or equal to the desired buffer size
+  var bufferDistance = 50;  // 100 meters buffer, adjust as needed
+  var bufferMask = distanceFromClouds.lte(bufferDistance);
+  // Combine the cloud mask and buffer mask to mask both clouds and surrounding pixels
+  var combinedMask = cloudMask.or(bufferMask);
+  // Apply the combined mask to the image
+  return img1.updateMask(combinedMask.not());  // Invert the mask (cloud + buffer masked)
+}
+
+// #################################### VISUALIZATIONS ####################################
+
+// ------------------------- Sentinel 2 visualization -------------------------
+//RGB
+var S2_vis = {
+  min: 0.0,
+  max: 0.3,
+  bands: ['B4', 'B3', 'B2']
+}
+//RGB Percentile
+var S2_visP = {
+  min: 0.0,
+  max: 0.3,
+  bands: ['B4_p75', 'B3_p75', 'B2_p75']
+}
+// NDVI
+var S2_ndvi = {
+  min:0, 
+  max:1, 
+  palette: ['white', 'green']}; 
+// Cloud
+var S2_cloud = {
+  min: 0.0,
+  max: 100,
+  palette: ['blue', 'white']
+}
+// Pre-QA Mask
+var S2_visPreMask = {
+  min: 0.0,
+  max: 0.3*10000,
+  bands: ['B4', 'B3', 'B2']
+}
+// #################################### IMAGE COLLECTION & COMPOSTING ####################################
+
+// ------------------------- SENTINEL 2 -------------------------
+// Filtering Cloud Probability Images
+// Note: Since I can't use the additional % filter, I must align the two collections
+//.filterMetadata('CLOUDY_PIXEL_PERCENTAGE', 'less_than', 20);
+// There is a small buffertime between when the S2_Harmonized and the S2_CloudProb images are taken
+// Define a time difference threshold (e.g., 1 hour = 3600000 ms)
+function filterWithBuffer (time) {
+  var startTime = ee.Date(time).advance(-1, 'hour');  // 1 hour before
+  var endTime = ee.Date(time).advance(1, 'hour');     // 1 hour after
+  return S2cloudProbFullCollection.filterDate(startTime, endTime);
+}
+
+// Filtering to only include Aotea for certain dates with certain amount of cloud coverage
+for (var year = 2023; year <= 2023; year++) {
+  var start = year + '-10-01';
+  var end = (year + 1) + '-01-31';  // Include October to January of the following year
+
+  var S2 = ee.ImageCollection('COPERNICUS/S2_SR_HARMONIZED')
+                .filterDate(start, end)
+                .filterBounds(aotea)
+                .filterMetadata('CLOUDY_PIXEL_PERCENTAGE', 'less_than', 80);
+                
+var S2_dates = S2.aggregate_array('system:time_start');
+
+// Over selecting cloud probability images initially (no % filter)
+var S2cloudProbFullCollection = ee.ImageCollection('COPERNICUS/S2_CLOUD_PROBABILITY')
+                .filterDate(start, end)
+                .filterBounds(aotea);
+              
+var cloud_dates = S2cloudProbFullCollection.aggregate_array('system:time_start');  
+
+// ######################################### OUTPUTS #######################################
+// Print the number of clearish images from end of each year taken
+var count = S2.size();
+print('# of clearish images from end of ' + year + ':', count);
+print(S2_dates)
+print(cloud_dates)
+var count2 = S2cloudProbFullCollection.size();
+print('Total cloud prob images from end of ' + year + ':', count2);
+// Loop through the indices of the visible collections to filter the cloud prob collection and display all
+var S2cloudProbSmallCollection = ee.ImageCollection([]);
+var S2probMatch = ee.ImageCollection([]);
+var S2probMasked = ee.ImageCollection([]);
+// var S2probMaskedBuffer = ee.ImageCollection([]);
+for (var i = 0; i < S2.size().getInfo(); i++) {
+  // Get images from both collections
+  var S2Image = S2.toList(S2.size().getInfo()).get(i);  // Get S2 image at index i
+  var cloudProbImage = filterWithBuffer(S2_dates.get(i)).first(); 
+  // Collecting masked S2 images
+  S2probMatch = S2probMatch.merge(ee.ImageCollection(S2Image));
+  // Collecting relavant cloudProbImages to visual check
+  S2cloudProbSmallCollection = S2cloudProbSmallCollection.merge(ee.ImageCollection([cloudProbImage]));
+  // Add the S2 image as a layer
+  // Map.addLayer(ee.Image(S2Image).clip(aotea), S2_visPreMask, 'S2 Image ' + i);
+  // Add the cloud probability image as a layer
+  // Map.addLayer(ee.Image(cloudProbImage).clip(aotea), S2_cloud, 'Cloud Probability Image ' + i);
+  // Create a Prob mask from the Cloud Prob Image.
+  var probMask = ee.Image(cloudProbImage).lt(20); // CLOUD PROBABILITY THRESHOLD
+  // Map.addLayer(probMask, {palette: ['blue', 'lightgreen']}, 'Cloud mask '+ i);
+  // Apply the Prob mask to the visible image; pixel values equal to 0 in the mask become invalid in the image
+  var S2imgMasked = ee.Image(S2Image).updateMask(probMask).divide(10000);
+  // Map.addLayer(S2imgMasked, S2_visPreMask, 'Prob Masked '+i);  
+  
+  
+  // // Applying small buffer to probability mask
+  // // Use fastDistanceTransform() to compute distance from clouds in meters
+  // var distanceFromClouds = probMask.fastDistanceTransform(30);  // 30 meters distance, adjust as needed
+  // // Create a buffer mask where distance is less than or equal to the desired buffer size
+  // var bufferDistance = 100;  // 100 meters buffer, adjust as needed
+  // var bufferMask = distanceFromClouds.lte(bufferDistance);
+  // // Combine the cloud mask and buffer mask to mask both clouds and surrounding pixels
+  // var combinedMask = probMask.or(bufferMask);
+  // // Apply the combined mask to the image
+ //var S2imgMaskedBuffer = ee.Image(S2Image).updateMask(combinedMask).divide(10000);  // Invert the mask (cloud + buffer masked)
+  // Collecting masked images to composite
+  // S2probMaskedBuffer = S2probMaskedBuffer.merge(ee.ImageCollection([S2imgMaskedBuffer]));
+  
+  // // Collecting masked images to composite
+ S2probMasked = S2probMasked.merge(ee.ImageCollection([S2imgMasked]));  
+
+}
+var count3 = S2probMasked.size();
+print('# of cloud prob masked images from end of ' + year + ':', count3);
+var count4 = S2cloudProbSmallCollection.size();
+print('# of clearish cloud prob images from end of ' + year + ':', count4);
+// // Original Composite without Masking (only filters for date and cloud %)
+// var OGcomposite = S2.map(mask1clouds).median().clip(aotea)
+// Map.addLayer(OGcomposite, S2_vis, 'S2 Composite-NoMaskfrom ' + year);
+// // Composite WITH Double Cloud Masking (only filters for date and cloud %) both QA and Score cloud filters to all images in the collection
+var SCOREcomposite = S2.map(processImage1).median();
+// Map.addLayer(SCOREcomposite, S2_vis, 'S2 Composite-DoubleMaskfrom ' + year);
+// // Composite WITH Cloud Probablity Masking
+var PROBcomposite = S2probMasked.median().clip(aotea);
+//calculate 90 percentile    
+// var PROBcompositeP = S2probMasked.reduce(ee.Reducer.percentile([75]));
+// Map.addLayer(PROBcomposite, S2_vis, 'S2 Composite-ProbMaskfrom ' + year);
+// // Composite WITH Cloud Probablity Masking and Buffer
+// var PROBBUFFcomposite = S2probMaskedBuffer.median().clip(aotea);
+// Map.addLayer(PROBBUFFcomposite, S2_vis, 'S2 Composite-ProbBuffMaskfrom ' + year);
+// // Mosaic with PROB on top
+// var mosaicPROB = ee.ImageCollection([SCOREcomposite, PROBcomposite]).mosaic();
+// Map.addLayer(mosaicPROB, S2_vis, 'Mosaic with PROB Composite on Top');
+// Mosaic with SCORE on top
+var mosaicSCORE = ee.ImageCollection([PROBcomposite, SCOREcomposite]).mosaic();
+Map.addLayer(mosaicSCORE, S2_vis, 'Mosaic with SCORE Composite on Top '+ year);
+// var mosaicSCOREP = ee.ImageCollection([PROBcompositeP, SCOREcomposite]).mosaic().clip(aotea);
+// Map.addLayer(mosaicSCOREP, S2_visP, 'Mosaic with SCORE Composite on Top Percentile Prob on Bottom');
+// END OF LOOP
+}
+
+// ##################################### NDVI DISPLAY ##################################
+// Normalized Difference Vegetation Index
+// 'NIR' (B8) and 'RED' (B4) 
+// var ndviSCORE = SCOREcomposite.normalizedDifference(['B8', 'B4']).rename(['ndvi']); 
+// Map.addLayer(ndviSCORE.clip(aotea), S2_ndvi, 'ndvi SCORE');
+// var ndviPROB = PROBcomposite.normalizedDifference(['B8', 'B4']).rename(['ndvi']); 
+// Map.addLayer(ndviPROB.clip(aotea), S2_ndvi, 'ndvi PROB');
+
+
+
+// ##################################### EXPORT ############################################ 
+print(year);
+Export.image.toDrive({
+  image: mosaicSCORE,
+  description: 'S2_MosaicofComposites_' + (year-1),  // Name of the file
+  scale: 10,  // Set the scale (resolution) in meters (10m for Sentinel-2)
+  region: aotea,  // Specify the region to export
+  maxPixels: 1e13,  // Increase max pixel count if needed
+  fileFormat: 'GeoTIFF'
+});

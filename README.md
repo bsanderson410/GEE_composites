@@ -1,4 +1,4 @@
-End goal: Remotely locate and track the recovery of past landslides (ideally rainfall triggered)
+End goal: Remotely locate and track the recovery of past landslides (with a focus on rainfall triggered)
     
     Intermediate Goals: 
       1) Filter and mask clouds from surface reflectance satelitte images in GEE to get a largely cloud free collection of images

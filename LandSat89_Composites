@@ -1,0 +1,115 @@
+// #################################### AOI ####################################
+
+var aotea = ee.FeatureCollection('projects/aotealandslides/assets/aotea');
+
+Map.addLayer(aotea, {color: 'red'}, 'aotea');
+
+Map.centerObject(aotea, 11);
+
+
+// #################################### SCALING FACTORS ####################################
+
+// // No scaling factors needed for Landsat 8 & 9 as they are already scaled properly in SR data
+// function applyScaleFactors(image) {
+//   var opticalBands = image. select('SR_B.').multiply(0.0000275).add(-0.2); // Factors from product description
+//   var thermalBands = image. select('SR_B.*').multiply(0.00341802).add(149.0)
+//   return image.addBands(opticalBands, null, true).addBands(thermalBands, null, true);
+// }
+
+// #################################### MASKING ####################################
+
+// ------------------------- cloudmasking Landsat 8 & 9 -------------------------
+
+
+function maskL89clouds(image) {
+  var qa = image.select('QA_PIXEL');
+  var cloudBitMask = 1 << 3;
+  var cirrusBitMask = 1 << 2;
+  var shadowBitMask = 1 << 4;
+  var dcloudBitMask = (1 << 1) // Need to test
+  var qaMask1 = qa.bitwiseAnd(cloudBitMask).eq(0).and(qa.bitwiseAnd(cirrusBitMask).eq(0)).and(qa.bitwiseAnd(shadowBitMask).eq(0)).and(qa.bitwiseAnd(dcloudBitMask).eq(0));
+  // Bit 0 - Fill
+  // Bit 1 - Dilated Cloud
+  // Bit 2 - Cirrus
+  // Bit 3 - Normal Clouds
+  // Bit 4 - Cloud Shadow
+  
+  // Buffer Off of QA_Mask1
+  // Use fastDistanceTransform() to compute distance from clouds in meters
+  var distanceFromClouds = qaMask1.fastDistanceTransform(30);  // 30 meters distance, adjust as needed
+  // Create a buffer mask where distance is less than or equal to the desired buffer size
+  var bufferDistance = 50;  // 100 meters buffer, adjust as needed
+  var bufferMask = distanceFromClouds.lte(bufferDistance);
+  // Combine the cloud mask and buffer mask to mask both clouds and surrounding pixels
+  var combinedMask = qaMask1.or(bufferMask);
+  
+  // Fmask classification values
+  var FMASK_CLEAR_GROUND = 0;
+  var FMASK_WATER = 2;
+  var FMASK_CLOUD_SHADOW = 3;
+  var FMASK_SNOW = 4;
+  var FMASK_CLOUD = 5;
+
+  
+  var qaMask2 = image.select('QA_PIXEL').bitwiseAnd(parseInt('11111',2)).eq(0);
+  var qaMask3 = image.neq(FMASK_CLOUD).and(image.neq(FMASK_CLOUD_SHADOW));
+  var saturationMask = image.select('QA_RADSAT').eq(0);
+  
+  return image.updateMask(combinedMask).updateMask(qaMask2).updateMask(saturationMask).updateMask(qaMask3);
+}
+
+// // ------------------------- cloudmasking using FMask -------------------------
+// function maskL89FMask(image) {
+//   var cloudMask = ee.Algorithms.FMask.matchClouds(image);
+//   return image.updateMask(cloudMask.not());
+// }
+
+// #################################### VISUALIZATIONS ####################################
+
+// ------------------------ Landsat 8 & 9 visualization with 70th percentile bands -------------------------
+
+var L89_vis = {
+  bands: ['SR_B4_p70', 'SR_B3_p70', 'SR_B2_p70'],  // Use the 70th percentile bands
+  min: (2000),   // Adjusted based on previous analysis
+  max: (25000),  // Adjusted to highlight bright features like bare soil
+};
+
+var L89_vis2 = {
+  bands: ['SR_B4', 'SR_B3', 'SR_B2'],  // Use the 70th percentile bands
+  min: 2000,   // Adjusted based on previous analysis
+  max: 25000,  // Adjusted to highlight bright features like bare soil
+};
+// #################################### IMAGE COLLECTION & COMPOSING ####################################
+
+// ------------------------- LANDSAT 8 & 9 COMPOSITE -------------------------
+
+for (var year = 2013; year <= 2018; year++) {
+  var start = year + '-10-01';
+  var end = (year + 1) + '-01-31';  // Include October to January of the following year
+
+  var L89 = ee.ImageCollection('LANDSAT/LC08/C02/T1_L2')
+                .merge(ee.ImageCollection('LANDSAT/LC09/C02/T1_L2'))
+                .filterDate(start, end)
+                .filterBounds(aotea)
+                .filterMetadata('CLOUD_COVER', 'less_than', 50)
+                //.map(applyScaleFactors)
+                .map(maskL89clouds)
+                .reduce(ee.Reducer.percentile([70])) // Take the 70th percentile
+                .clip(aotea);
+
+  // // Add the composite to the map
+  // Map.addLayer(L89, L89_vis, 'L89_p70' + year);
+  
+  var L89med = ee.ImageCollection('LANDSAT/LC08/C02/T1_L2')
+                .merge(ee.ImageCollection('LANDSAT/LC09/C02/T1_L2'))
+                .filterDate(start, end)
+                .filterBounds(aotea)
+                .filterMetadata('CLOUD_COVER', 'less_than', 80)
+                //.map(applyScaleFactors)
+                .map(maskL89clouds)
+                .median()
+                .clip(aotea);
+
+  // Add the composite to the map
+  Map.addLayer(L89med, L89_vis2, 'L89_Median Composite ' + year);
+}

@@ -1,6 +1,8 @@
 // ###################################################################### ABSTRACT #########################################################################################
 
 // This code aims to create a clear (cloud and shadow free) annual composite image of an area of interest using a collection of Sentinel 2 images taken during a certain time of year.
+// Language: JavaScript
+// Environment: Google Earth Engine
 
 // ---------------------------------------------------------------------- INPUTS -------------------------------------------------------------------------------------
 

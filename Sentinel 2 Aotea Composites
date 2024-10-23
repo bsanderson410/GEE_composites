@@ -249,34 +249,34 @@ function processCloudProbWithBufferNoShadow(S2Image) {
   return S2ImageNoCloudNoShadowNoExtraBands
 }
 
-// ################################################# VISUALIZATION #############################################################
+// ################################################# VISUALIZATION #####################################################################
 
-//Visible RGB (after scale factor of 1e4 applied -- i.e. .divide(10000) was applied during masking)
+//-----------------  Visible RGB (AFTER scale factor of 1e4 applied -- i.e. .divide(10000) was applied during masking) ------------------
 var S2_vis = {
   min: 0.0,
   max: 0.3,
   bands: ['B4', 'B3', 'B2']
 }
-//Visible RGB (before scale factor of 1e4 applied - i.e. original unmasked images)
+//-----------------  Visible RGB (BEFORE scale factor of 1e4 applied - i.e. original unmasked images) -----------------------------------
 var S2_visPreMask = {
   min: 0.0,
   max: 0.3*10000,
   bands: ['B4', 'B3', 'B2']
 }
-//Visible RGB Percentile (currently unused, but allows composite visualization using a percentile that is not 50%/median)
+//----------------  Visible RGB Percentile (currently unused, but allows composite visualization using a percentile that is not 50%/median) 
 // Ex: 75th percentile
 var S2_visPercentile = {
   min: 0.0,
   max: 0.3,
   bands: ['B4_p75', 'B3_p75', 'B2_p75']
 }
-// NDVI
+// -------------------------------------------- NDVI Visualization  -----------------------------------------------------------------------------
 // Visualizes dense vegetation as dark green with a gradient to white non-vegetation (exposed soild/roads/buildings/sand/rock/etc.)
 var S2_ndvi = {
   min:0, 
   max:1, 
   palette: ['white', 'green']}; 
-// Cloud Probability 
+//--------------------------------------------- Cloud Probability Visualization -------------------------------------------------------------
 // Visualizes the S2_CLOUD_PROBABILITY band (useful for mask quality assesment and debugging)
 // Clouds appear as white with a gradient to blue non-cloudy areas
 var S2_cloud = {
@@ -284,7 +284,6 @@ var S2_cloud = {
   max: 100,
   palette: ['blue', 'white']
 }
-
 // ###################################################### FILTERING IMAGE COLLECTIONS #####################################################
 
 // Defining cloudy pixel percentage threshold to filter

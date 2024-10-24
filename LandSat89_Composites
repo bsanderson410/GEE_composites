@@ -1,10 +1,56 @@
-// #################################### AOI ####################################
+// ###################################################################### ABSTRACT #########################################################################################
 
-var aotea = ee.FeatureCollection('projects/aotealandslides/assets/aotea');
+// This code aims to create a clear (cloud and shadow free) annual composite image of an area of interest using a merged collection of Landsat 8 and Landsat 9 surface reflectance images taken during a certain time of year.
+// Language: JavaScript
+// Environment: Google Earth Engine
 
-Map.addLayer(aotea, {color: 'red'}, 'aotea');
+// ---------------------------------------------------------------------- INPUTS -------------------------------------------------------------------------------------
 
-Map.centerObject(aotea, 11);
+// There are several input parameters that can be changed to tailor results. 
+// Each key inputer parameter is commented with "// _________ THRESHOLD INPUT" so one can use Ctrl+F with "THRESHOLD INPUT" to sort through all
+
+// Area of Interest (AOI) and Date Parameters
+      // - AOI (shapefile with region that one wants to collect images from and create the clear annual composites of):.......................................var AOI (shapefile)
+      // - Years (each year corresponds to one run through the for loop to create a composite):...............................................................iterative var year (first line of for loop - range 2018-2023)
+      // - Start Date (date that starts the time period for which images are collected from each year):.......................................................var start (second line of for loop- date format)
+      // - End Date (date that ends the time period for which images are collected from each year):...........................................................var end (third line of for loop - date format)
+
+// Cloud Masking Parameters
+      // - General Filters:
+      //     - Cloudy Pixel Percentage (metadata limit to only collect images that have less than this percentage of pixels that are clouds):..................var cloudCoverPercentThreshold (range 0-100)
+      // - Cloud Masking Thresholds
+      //     - QA_PIXEL:
+      //         - Buffer Distance (distance in meters to add additional mask that extends off of all pixels in QA_PIXEL mask).................................var bufferDisance (meters)
+      // - Percentile disply
+      //     - Median vs. higher percentile to display a 'brighter' composite with less shadow.................................................................currently commented out .reduce(ee.Reducer.percentile([70]))
+
+// ------------------------------------------------------------------ OUTPUTS ------------------------------------------------------------------------------------------------------
+
+// PRIMARY OUTPUT: 
+// One Cloud/Cloud-Shadow Free Compositie for each year clipped to the AOI......................................................mosaicPROB
+//    - Median composite of Landsat 89 images that uses QA_PIXEL bands to mask clouds and shadows with a buffer mask around clouds to catch cirrus edges
+//
+// SECONDARY/OPTIONAL OUTPUTS:
+//    - Exporting capabilities to upload composites to Google Drive as a GeoTiff
+//    - NDVI display of composite
+//    - 70th percentile composite rather than median
+
+// ----------------------------------------------- Landsat 89 Bands Index (for human reference, not coding) ---------------------------------------------------------------------
+
+// Landsat89_Band      = ['SR_B2', 'SR_B3', 'SR_B4', 'SR_B5', 'SR_B6', 'SR_B7']; 
+// Landsat89_BandName  = ['blue' , 'green', 'red'  , 'nir'  , 'swir1', 'swir2'];  // NIR = near-infrared,   SWIR = short-wave infrared
+
+
+// #################################### Area of Interest ####################################
+
+// AOI Shapefile loaded into Google Earth Engine Project Assets
+var AOI = ee.FeatureCollection('projects/aotealandslides/assets/aotea');
+
+// Creates a simple red fill over the AOI (useful as a background)
+Map.addLayer(AOI, {color: 'red'}, 'aotea');
+
+// Centering the map output on the AOI
+Map.centerObject(AOI, 11);
 
 
 // #################################### SCALING FACTORS ####################################
@@ -16,11 +62,9 @@ Map.centerObject(aotea, 11);
 //   return image.addBands(opticalBands, null, true).addBands(thermalBands, null, true);
 // }
 
-// #################################### MASKING ####################################
+// #################################### CLOUD MASKING ####################################
 
-// ------------------------- cloudmasking Landsat 8 & 9 -------------------------
-
-
+// ---------------------- simple cloudmasking Landsat 89 using QA_PIXEL Band and Buffer ----------------------------------
 function maskL89clouds(image) {
   var qa = image.select('QA_PIXEL');
   var cloudBitMask = 1 << 3;
@@ -38,7 +82,7 @@ function maskL89clouds(image) {
   // Use fastDistanceTransform() to compute distance from clouds in meters
   var distanceFromClouds = qaMask1.fastDistanceTransform(30);  // 30 meters distance, adjust as needed
   // Create a buffer mask where distance is less than or equal to the desired buffer size
-  var bufferDistance = 50;  // 100 meters buffer, adjust as needed
+  var bufferDistance = 50;  // BUFFER DISTANCE THRESHOLD INPUT
   var bufferMask = distanceFromClouds.lte(bufferDistance);
   // Combine the cloud mask and buffer mask to mask both clouds and surrounding pixels
   var combinedMask = qaMask1.or(bufferMask);
@@ -67,49 +111,87 @@ function maskL89clouds(image) {
 // #################################### VISUALIZATIONS ####################################
 
 // ------------------------ Landsat 8 & 9 visualization with 70th percentile bands -------------------------
-
-var L89_vis = {
+var L89_visPercent = {
   bands: ['SR_B4_p70', 'SR_B3_p70', 'SR_B2_p70'],  // Use the 70th percentile bands
   min: (2000),   // Adjusted based on previous analysis
   max: (25000),  // Adjusted to highlight bright features like bare soil
 };
 
-var L89_vis2 = {
-  bands: ['SR_B4', 'SR_B3', 'SR_B2'],  // Use the 70th percentile bands
+// ------------------------ Landsat 8 & 9 visualization with standard bands (for median composite) -------------------------
+var L89_vis = {
+  bands: ['SR_B4', 'SR_B3', 'SR_B2'],
   min: 2000,   // Adjusted based on previous analysis
   max: 25000,  // Adjusted to highlight bright features like bare soil
 };
+
+// ---------------------------- Landsat 8 & 9 NDVI visualization -----------------------------------------------
+// Visualizes dense vegetation as dark green with a gradient to white non-vegetation (exposed soild/roads/buildings/sand/rock/etc.)
+var L89_ndvi = {
+  min:0, 
+  max:1, 
+  palette: ['white', 'green']}; 
 // #################################### IMAGE COLLECTION & COMPOSING ####################################
 
-// ------------------------- LANDSAT 8 & 9 COMPOSITE -------------------------
+// Loop to make a composite from 'start' date to 'end' date for each year in the loop
+// START OF ANNUAL 'FOR' LOOP
+for (var year = 2013; year <= 2018; year++) { // YEAR RANGE THRESHOLD INPUT
+  var start = year + '-10-01';  // ANNUAL START DATE THRESHOLD INPUT
+  var end = (year + 1) + '-01-31';  // ANNUAl START DATE THRESHOLD IHNPUT 
+  // Currently includes October to January of the following year
 
-for (var year = 2013; year <= 2018; year++) {
-  var start = year + '-10-01';
-  var end = (year + 1) + '-01-31';  // Include October to January of the following year
+// ---------------------- Landsat 89 merged collection to display PERCENTILE composite --------------------
 
-  var L89 = ee.ImageCollection('LANDSAT/LC08/C02/T1_L2')
-                .merge(ee.ImageCollection('LANDSAT/LC09/C02/T1_L2'))
-                .filterDate(start, end)
-                .filterBounds(aotea)
-                .filterMetadata('CLOUD_COVER', 'less_than', 50)
-                //.map(applyScaleFactors)
-                .map(maskL89clouds)
-                .reduce(ee.Reducer.percentile([70])) // Take the 70th percentile
-                .clip(aotea);
+  // var L89Percent = ee.ImageCollection('LANDSAT/LC08/C02/T1_L2')
+  //               .merge(ee.ImageCollection('LANDSAT/LC09/C02/T1_L2'))
+  //               .filterDate(start, end)
+  //               .filterBounds(AOI)
+  //               .filterMetadata('CLOUD_COVER', 'less_than', 50)
+  //               //.map(applyScaleFactors)
+  //               .map(maskL89clouds)
+  //               .reduce(ee.Reducer.percentile([70])) // REFLECTANCE PERCENTILE THRESHOLD INPUT
+  //               .clip(AOI);
 
-  // // Add the composite to the map
-  // Map.addLayer(L89, L89_vis, 'L89_p70' + year);
   
+// ---------------------- Landsat 89 merged collection to display MEDIAN composite --------------------
+  
+  var cloudCoverPercentThreshold = 80 // CLOUDY PIXEL PERCENT THRESHOLD INPUT
   var L89med = ee.ImageCollection('LANDSAT/LC08/C02/T1_L2')
                 .merge(ee.ImageCollection('LANDSAT/LC09/C02/T1_L2'))
                 .filterDate(start, end)
-                .filterBounds(aotea)
-                .filterMetadata('CLOUD_COVER', 'less_than', 80)
+                .filterBounds(AOI)
+                .filterMetadata('CLOUD_COVER', 'less_than', cloudCoverPercentThreshold)
                 //.map(applyScaleFactors)
                 .map(maskL89clouds)
                 .median()
-                .clip(aotea);
+                .clip(AOI);
 
+// ####################################### OUTPUTS ##########################################################
+
+// ----------------------------------- Composite Display --------------------------------------------------
+// Percentile Composite
   // Add the composite to the map
-  Map.addLayer(L89med, L89_vis2, 'L89_Median Composite ' + year);
+  // Map.addLayer(L89Percent, L89_visPercent, 'L89_p70' + year);
+  
+// Median Composite
+  // Add the composite to the map
+  Map.addLayer(L89med, L89_vis, 'L89_Median Composite ' + year);
+  
+// -------------------------------------- NDVI Display ---------------------------------------------------------------------
+// Normalized Difference Vegetation Index
+// Band Index: 'NIR' (SR_B5) and 'RED' (SR_B4) 
+// var ndvi = L89med.normalizedDifference(['SR_B5', 'SR_B4']).rename(['ndvi']); 
+// Map.addLayer(ndvi.clip(AOI), L89_ndvi, 'Composite NDVI ' + year);
+
+
+// ------------------------------------EXPORT TO GeoTiff -------------------------------------
+// Export.image.toDrive({
+//   image: L89med,
+//   description: 'L89_Median_Composite_' + (year),  // Name of the file
+//   scale: 30,  // Set the scale (resolution) in meters (30m for Landsat 8 and 9)
+//   region: AOI,  // Specify the region to export
+//   maxPixels: 1e13,  // Increase max pixel count if needed
+//   fileFormat: 'GeoTIFF'
+// });
+  
 }
+// END OF ANNUAL 'FOR' LOOP
